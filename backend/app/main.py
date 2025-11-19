@@ -1,10 +1,10 @@
 from fastapi import FastAPI, Form
-from collector import get_devices
+from app.collector import get_devices
 
 app = FastAPI()
 
 
 @app.get("/collector")
-def collector_device(host: str = Form(...)):
+def collector_device():
     data = get_devices()
     return data
