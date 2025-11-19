@@ -1,0 +1,57 @@
+:root{
+  --bg:#f6f8fb; --card:#ffffff; --muted:#6b7280; --accent:#2563eb;
+}
+*{box-sizing:border-box}
+body{font-family:Inter, ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial; margin:0; background:var(--bg); color:#111}
+.container{max-width:1100px; margin:28px auto; padding:20px}
+
+.device-header{display:flex; justify-content:space-between; align-items:center; background:var(--card); padding:14px 18px; border-radius:10px; box-shadow:0 6px 18px rgba(16,24,40,0.06); margin-bottom:18px}
+.device-name{margin:0; font-size:18px}
+.device-value{font-weight:600}
+.ip{margin:2px 0 0; color:var(--muted)}
+.header-right{display:flex; align-items:center; gap:12px}
+.status-row{display:flex; align-items:center; gap:8px}
+.status-badge{display:inline-block; width:12px; height:12px; border-radius:50%; background:#ef4444}
+.status-badge.green{background:#10b981}
+.status-badge.red{background:#ef4444}
+.last-seen{color:var(--muted)}
+
+.refresh-btn{border:0; background:transparent; font-size:18px; padding:8px 10px; border-radius:6px; cursor:pointer}
+.refresh-btn.rotating{animation:spin 0.9s linear}
+@keyframes spin{from{transform:rotate(0)} to{transform:rotate(360deg)}}
+
+.metrics{display:grid; grid-template-columns:repeat(3,1fr); gap:14px; margin-bottom:18px}
+.metric-card{background:var(--card); padding:14px; border-radius:10px; box-shadow:0 6px 18px rgba(16,24,40,0.04); transition:transform .18s ease, box-shadow .18s; display:flex; flex-direction:column; justify-content:space-between}
+.metric-card:hover{transform:scale(1.02); box-shadow:0 10px 30px rgba(16,24,40,0.08)}
+.metric-header{display:flex; justify-content:space-between; align-items:center; margin-bottom:12px}
+.metric-value{font-weight:700}
+
+.progress-bar{width:100%; height:12px; background:#eef2ff; border-radius:999px; overflow:hidden}
+.progress-fill{height:100%; background:linear-gradient(90deg, #4f46e5, #06b6d4); border-radius:999px; transition:width .8s ease}
+
+.progress-circle{width:92px; height:92px; border-radius:50%; display:grid; place-items:center; background:conic-gradient(#10b981 calc(var(--percent) * 1%), #e6e7ef 0); position:relative}
+.progress-center{position:relative; width:66px; height:66px; border-radius:50%; background:var(--card); display:grid; place-items:center; font-weight:700}
+
+.interfaces{background:var(--card); padding:14px; border-radius:10px; box-shadow:0 6px 18px rgba(16,24,40,0.04); margin-bottom:18px}
+.interfaces h3{margin:0 0 10px}
+.interfaces-table{width:100%; border-collapse:collapse}
+.interfaces-table th{ text-align:left; padding:10px 8px; color:var(--muted); font-weight:600 }
+.interfaces-table td{ padding:12px 8px; border-top:1px solid #f0f2f6 }
+.interfaces-table tbody tr{ opacity:0; transform:translateY(6px); animation:fadein 320ms ease forwards }
+@keyframes fadein{to{opacity:1; transform:none}}
+
+.diagnostics{background:var(--card); padding:14px; border-radius:10px; box-shadow:0 6px 18px rgba(16,24,40,0.04)}
+.diag-buttons{display:flex; gap:8px; margin-bottom:14px}
+.diag-buttons button{border:1px solid #e6e9f2; background:transparent; padding:8px 12px; border-radius:8px; cursor:pointer}
+
+.panel{overflow:hidden; max-height:0; transition:max-height .4s ease; opacity:0}
+.panel.open{max-height:240px; opacity:1}
+.panel-inner{padding:10px 0}
+.panel-content{padding:10px 8px; background:#fbfdff; border-radius:8px; box-shadow:inset 0 1px 0 rgba(255,255,255,0.4)}
+.result{animation:fadeRes .24s ease;}
+@keyframes fadeRes{from{opacity:0; transform:translateY(6px)} to{opacity:1; transform:none}}
+
+/* responsive */
+@media (max-width:900px){
+  .metrics{grid-template-columns:1fr}
+}
