@@ -13,11 +13,8 @@ logger = logging.getLogger("api.router")
 class DeviceCreate(BaseModel):
     device_id: str = Field(..., description="Unique device id")
     hostname: Optional[str] = None
-    ip: Optional[str] = None
     snmp_community: Optional[str] = "public"
-    model: Optional[str] = None
-    vendor: Optional[str] = None
-    notes: Optional[str] = None
+    snmp_version: Optional[str] = "v2c"
 
 # Health / summary
 @router.get("/summary")
@@ -116,13 +113,8 @@ async def create_device(payload: DeviceCreate = Body(...), add_to_librenms: bool
     snapshot = {
         "device_id": payload.device_id,
         "hostname": payload.hostname,
-        "ip": payload.ip,
         "last_seen": datetime.now(timezone.utc).isoformat(),
-        "raw": {
-            "model": payload.model,
-            "vendor": payload.vendor,
-            "notes": payload.notes
-        }
+        
     }
 
     try:
@@ -135,8 +127,8 @@ async def create_device(payload: DeviceCreate = Body(...), add_to_librenms: bool
     if add_to_librenms:
         ln_payload = {
             "hostname": payload.hostname or payload.device_id,
-            "ip": payload.ip,
             "snmp_community": payload.snmp_community or "public",
+            "snmp_version": payload.snmp_version or "v2c",
             "os": payload.model or "generic",
             "model": payload.model,
             "notes": payload.notes or ""
