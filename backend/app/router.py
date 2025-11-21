@@ -1,11 +1,23 @@
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Body
+from pydantic import BaseModel, Field
 from typing import Optional, List
 from datetime import datetime, timedelta, timezone
-
+from collector import add_device_to_librenms
+import logging
 import store as db_store  # using the module created above
 from utils.config import settings
 
 router = APIRouter(prefix="/api", tags=["dashboard"])
+logger = logging.getLogger("api.router")
+
+class DeviceCreate(BaseModel):
+    device_id: str = Field(..., description="Unique device id")
+    hostname: Optional[str] = None
+    ip: Optional[str] = None
+    snmp_community: Optional[str] = "public"
+    model: Optional[str] = None
+    vendor: Optional[str] = None
+    notes: Optional[str] = None
 
 # Health / summary
 @router.get("/summary")
@@ -94,6 +106,52 @@ async def get_alerts(limit: int = 50):
     alerts = await db_store.query_recent_alerts(limit=limit)
     return alerts
 
+# Device creation
+@router.post("/devices")
+async def create_device(payload: DeviceCreate = Body(...), add_to_librenms: bool = Query(False)):
+    """
+    Create a device locally and optionally add it to LibreNMS.
+    """
+    # 1) persist local snapshot
+    snapshot = {
+        "device_id": payload.device_id,
+        "hostname": payload.hostname,
+        "ip": payload.ip,
+        "last_seen": datetime.now(timezone.utc).isoformat(),
+        "raw": {
+            "model": payload.model,
+            "vendor": payload.vendor,
+            "notes": payload.notes
+        }
+    }
+
+    try:
+        await db_store.update_device_snapshot(payload.device_id, snapshot)
+    except Exception as e:
+        logger.exception("Failed to persist device snapshot: %s", e)
+        raise HTTPException(status_code=500, detail=f"Failed to persist device snapshot: {e}")
+
+    # 2) optionally add to LibreNMS using collector helper
+    if add_to_librenms:
+        ln_payload = {
+            "hostname": payload.hostname or payload.device_id,
+            "ip": payload.ip,
+            "snmp_community": payload.snmp_community or "public",
+            "os": payload.model or "generic",
+            "model": payload.model,
+            "notes": payload.notes or ""
+        }
+        try:
+            ln_resp = await add_device_to_librenms(ln_payload)
+            logger.info("LibreNMS add device response: %s", ln_resp)
+        except Exception as e:
+            logger.exception("LibreNMS create failed: %s", e)
+            # decide policy: here we return 502 and keep local snapshot (you can change)
+            raise HTTPException(status_code=502, detail=f"LibreNMS error: {e}")
+
+    return {"status": "ok", "device": snapshot}
+
+
 # Devices list
 @router.get("/devices")
 async def get_devices():
@@ -107,3 +165,4 @@ async def get_device_metrics(device_id: str, metric: str = Query("cpu"), minutes
     start = end - timedelta(minutes=minutes)
     pts = await db_store.query_timeseries_range(device_id, metric, start, end)
     return {"device_id": device_id, "metric": metric, "points": pts}
+

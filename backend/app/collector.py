@@ -229,3 +229,25 @@ async def start_ingestion_loop():
             logger.exception("ingestion iteration failed")
         await asyncio.sleep(interval)
 
+async def add_device_to_librenms(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Adds a device to LibreNMS using the standard API.
+    Returns LibreNMS response JSON on success, raises exception on failure.
+    """
+    librenms_url = getattr(settings, "LIBRENMS_URL", None)
+    librenms_token = getattr(settings, "LIBRENMS_TOKEN", None)
+
+    if not librenms_url or not librenms_token:
+        raise RuntimeError("LibreNMS not configured (LIBRENMS_URL/LIBRENMS_TOKEN missing)")
+
+    headers = {"X-Auth-Token": librenms_token}
+    url = librenms_url.rstrip("/") + "/api/v0/devices"
+
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        r = await client.post(url, json=payload, headers=headers)
+        # raise for client/server errors
+        r.raise_for_status()
+        try:
+            return r.json()
+        except Exception:
+            return {"status_code": r.status_code, "text": r.text}

@@ -12,7 +12,6 @@
 from fastapi import FastAPI
 import asyncio
 import logging
-
 from utils.config import settings
 from collector import start_ingestion_loop
 from anomaly import run_anomaly_engine
