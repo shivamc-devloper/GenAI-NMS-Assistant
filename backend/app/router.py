@@ -126,6 +126,7 @@ async def create_device(payload: DeviceCreate = Body(...), add_to_librenms: bool
         raise HTTPException(status_code=500, detail=f"Failed to persist device snapshot: {e}")
 
     # 2) optionally add to LibreNMS using collector helper
+    librenms_response = None
     if add_to_librenms:
         ln_payload = {
             "hostname": payload.hostname or payload.device_id,
@@ -138,12 +139,17 @@ async def create_device(payload: DeviceCreate = Body(...), add_to_librenms: bool
         try:
             ln_resp = await add_device_to_librenms(ln_payload)
             logger.info("LibreNMS add device response: %s", ln_resp)
+            librenms_response = ln_resp
         except Exception as e:
             logger.exception("LibreNMS create failed: %s", e)
-            # decide policy: here we return 502 and keep local snapshot (you can change)
-            raise HTTPException(status_code=502, detail=f"LibreNMS error: {e}")
+            # Don't raise exception - device is still created locally
+            librenms_response = {"status": "error", "message": f"LibreNMS unavailable: {str(e)}"}
 
-    return {"status": "ok", "device": snapshot}
+    return {
+        "status": "ok", 
+        "device": snapshot,
+        "librenms_response": librenms_response
+    }
 
 
 # Devices list
