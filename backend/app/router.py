@@ -7,6 +7,18 @@ import logging
 import store as db_store  # using the module created above
 from utils.config import settings
 
+import httpx
+import asyncio
+try:
+    import asyncssh
+    ASYNC_SSH_AVAILABLE = True
+except Exception:
+    ASYNC_SSH_AVAILABLE = False
+
+from pydantic import BaseModel
+from typing import Literal
+
+
 router = APIRouter(prefix="/api", tags=["dashboard"])
 logger = logging.getLogger("api.router")
 
@@ -15,6 +27,19 @@ class DeviceCreate(BaseModel):
     hostname: Optional[str] = None
     snmp_community: Optional[str] = "public"
     snmp_version: Optional[str] = "v2c"
+
+class SnmpControl(BaseModel):
+    action: Literal["disable", "enable"] = "disable"
+    method: Literal["librenms", "ssh", "db"] = "librenms"
+    # only for ssh method
+    ssh_user: Optional[str] = None
+    ssh_password: Optional[str] = None  # you may prefer keys; example kept simple
+    ssh_port: Optional[int] = 22
+    # for librenms method you may pass options (e.g. remove or set community "")
+    librenms_remove: Optional[bool] = False
+    # optional reason stored in DB/log
+    reason: Optional[str] = None
+
 
 # Health / summary
 @router.get("/summary")
@@ -157,4 +182,119 @@ async def get_device_metrics(device_id: str, metric: str = Query("cpu"), minutes
     start = end - timedelta(minutes=minutes)
     pts = await db_store.query_timeseries_range(device_id, metric, start, end)
     return {"device_id": device_id, "metric": metric, "points": pts}
+
+# Helper: call LibreNMS API to disable (or update) device
+async def _librenms_disable_device(hostname: str, remove: bool = False):
+    """
+    Uses settings.LIBRENS_API_URL and settings.LIBRENS_API_TOKEN (configure these)
+    If remove=True -> attempt to delete device from LibreNMS
+    Otherwise -> update device to disable SNMP (clear SNMP fields or set disabled flag)
+    """
+    api_url = getattr(settings, "LIBRENS_API_URL", None)
+    api_token = getattr(settings, "LIBRENS_API_TOKEN", None)
+    if not api_url or not api_token:
+        raise RuntimeError("LibreNMS API URL or token not configured in settings")
+
+    headers = {"X-Auth-Token": api_token, "Accept": "application/json"}
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        if remove:
+            # try delete by hostname (LibreNMS expects ID or hostname endpoint depends on your version)
+            # we'll try to delete by hostname
+            resp = await client.delete(f"{api_url}/devices/{hostname}", headers=headers)
+            if resp.status_code not in (200, 204):
+                raise RuntimeError(f"LibreNMS delete failed: {resp.status_code} {resp.text}")
+            return {"librenms": "deleted"}
+        else:
+            # patch/update device: clear SNMP community and optionally set disabled flag
+            # Exact LibreNMS fields vary by version; typical field names: 'snmp_community', 'snmp_version', 'disabled'
+            payload = {"snmp_community": "", "snmp_version": "", "disabled": 1}
+            resp = await client.patch(f"{api_url}/devices/{hostname}", headers=headers, json=payload)
+            if resp.status_code not in (200, 202):
+                # Some LibreNMS versions may not accept PATCH on /devices/{hostname}; try POST to /devices/edit
+                # Fallback: try POST to /devices with 'disabled' flag (best-effort; adjust for your LibreNMS)
+                raise RuntimeError(f"LibreNMS update failed: {resp.status_code} {resp.text}")
+            return {"librenms": "disabled"}
+        
+# Helper: run SSH commands to stop and disable snmpd on remote host
+async def _ssh_disable_snmp(host: str, user: str, password: Optional[str], port: int = 22):
+    """
+    Attempts async SSH using asyncssh. If asyncssh isn't available, raise helpful error.
+    Command executed: sudo systemctl stop snmpd && sudo systemctl disable snmpd
+    NOTE: remote host must allow password or key auth and user must be able to run sudo without interactive prompt.
+    """
+    if not ASYNC_SSH_AVAILABLE:
+        raise RuntimeError("asyncssh not available on the API server. Install asyncssh for SSH operations.")
+    cmd = "sudo systemctl stop snmpd && sudo systemctl disable snmpd || true"
+    try:
+        conn = await asyncssh.connect(host, port=port, username=user, password=password, known_hosts=None)
+        result = await conn.run(cmd, check=False)
+        await conn.close()
+        return {"stdout": result.stdout, "stderr": result.stderr, "exit_status": result.exit_status}
+    except Exception as e:
+        raise RuntimeError(f"SSH error: {e}")
+
+# Main API endpoint to enable/disable SNMP for a device
+@router.post("/devices/{device_id}/snmp")
+async def control_snmp(device_id: str, payload: SnmpControl = Body(...)):
+    """
+    Control SNMP for a device.
+    - method=librenms: uses LibreNMS API to disable monitoring (recommended for monitoring-only disable)
+    - method=ssh: runs systemctl stop/disable on the remote host over SSH (actually stops service)
+    - method=db: flips a local snmp_enabled flag in DB and optionally remove from LibreNMS
+    """
+    # 1) resolve device info from your DB to find hostname / ip
+    device = await db_store.get_device(device_id)
+    if not device:
+        raise HTTPException(status_code=404, detail="Device not found")
+
+    hostname = device.get("hostname") or device.get("device_id") or device.get("management_ip")
+    ip = device.get("management_ip") or hostname
+
+    try:
+        if payload.method == "librenms":
+            # call LibreNMS API
+            res = await _librenms_disable_device(hostname, remove=payload.librenms_remove)
+            # store change locally
+            await db_store.update_device_snapshot(device_id, {**device, "snmp_enabled": (payload.action == "enable")})
+            return {"status": "ok", "method": "librenms", "result": res}
+
+        elif payload.method == "ssh":
+            if payload.action == "enable":
+                # enabling via SSH: start & enable service
+                cmd = "sudo systemctl start snmpd && sudo systemctl enable snmpd || true"
+                if not ASYNC_SSH_AVAILABLE:
+                    raise HTTPException(status_code=500, detail="asyncssh not installed on API server")
+                conn = await asyncssh.connect(ip, port=payload.ssh_port or 22,
+                                              username=payload.ssh_user, password=payload.ssh_password, known_hosts=None)
+                result = await conn.run(cmd, check=False)
+                await conn.close()
+                await db_store.update_device_snapshot(device_id, {**device, "snmp_enabled": True})
+                return {"status": "ok", "method": "ssh", "stdout": result.stdout, "stderr": result.stderr, "exit": result.exit_status}
+            else:
+                # disable via SSH
+                res = await _ssh_disable_snmp(ip, payload.ssh_user, payload.ssh_password, payload.ssh_port or 22)
+                await db_store.update_device_snapshot(device_id, {**device, "snmp_enabled": False})
+                return {"status": "ok", "method": "ssh", "result": res}
+
+        elif payload.method == "db":
+            # only update local DB and optionally remove from LibreNMS if requested
+            new_flag = (payload.action == "enable")
+            await db_store.update_device_snapshot(device_id, {**device, "snmp_enabled": new_flag})
+            res = {"db": "updated", "snmp_enabled": new_flag}
+            if payload.librenms_remove and not new_flag:
+                try:
+                    ln_res = await _librenms_disable_device(hostname, remove=True)
+                    res["librenms"] = ln_res
+                except Exception as e:
+                    res["librenms_error"] = str(e)
+            return {"status": "ok", "method": "db", "result": res}
+
+        else:
+            raise HTTPException(status_code=400, detail="Unknown method")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("SNMP control failed for %s: %s", device_id, e)
+        raise HTTPException(status_code=500, detail=str(e))
+
 
