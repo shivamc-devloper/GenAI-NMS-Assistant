@@ -1,8 +1,5 @@
 import requests
-
-API = "http://localhost:8000/api/v0"
-TOKEN = "8db757baccab3961a2a9ecf52fac74ff"
-HEADERS = {"X-Auth-Token": TOKEN}
+from utils.config import API, HEADERS
 
 
 def get_devices():
